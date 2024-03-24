@@ -5,9 +5,9 @@
  
  * SSD_VGG16_PyTorch_CustomDataset.ipynb -- Jupyter notebook containing code for performing PyTorch object detection on a custom dataset. Specifically, this notebook contains code for pre-processing image and annotation data, tuning hyperparameters using Bayesian Optimization, gradient accumulation enabled fine-tuning of SSD w/ VGG16 pre-trained on COCO and ImageNet, respectively, final model inference on the test dataset, and visualizing model predictions on original images. 
  
- * coco_eval.py -- COCO Style Dataset Evaluation Tools
+ * coco_eval.py -- COCO style dataset evaluation tools
  
- * coco_utils.py -- COCO Style Dataset Data Utilities
+ * coco_utils.py -- COCO style dataset utilities
  
  * engine_gradientAccumulation.py -- Gradient accumulation enabled PyTorch object detection model training and evaluation engines
  

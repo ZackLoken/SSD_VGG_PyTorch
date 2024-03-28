@@ -46,11 +46,11 @@ def train_one_epoch(model, optimizer, data_loader, accumulation_steps, device, e
 
         # accumulate gradients for specified number of batches (accumulation steps) before zeroing
         if ((batch_index + 1) % accumulation_steps == 0) or ((batch_index + 1) == len(data_loader)):
-            optimizer.step()
             optimizer.zero_grad()
+            optimizer.step()
 
-            if lr_scheduler is not None:
-                lr_scheduler.step()
+        if lr_scheduler is not None:
+            lr_scheduler.step()
 
         metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])

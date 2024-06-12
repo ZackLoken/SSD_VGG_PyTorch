@@ -1,3 +1,5 @@
+![alt text](https://github.com/ZackLoken/SSD_VGG_PyTorch/blob/main/test_results.png)
+
 # SSD_VGG_PyTorch
 Repo containing PyTorch code and data for training SSD w/ VGG16 backbone to detect ducks from UAV imagery. Users can clone this repository, load the corresponding conda environment using `environment.yml`, download the training images and annotation data (link below), and then change the folder paths in `SSD_VGG16_PyTorch_CustomDataset.ipynb` to the directory where the training data was downloaded. If using a GPU, CUDA Toolkit version 12.3 must be downloaded following the instructions here: (https://developer.nvidia.com/cuda-12-3-0-download-archive)
 

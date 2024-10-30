@@ -10,7 +10,7 @@ from coco_eval import CocoEvaluator
 import utils
 
 
-def train_one_epoch(model, optimizer, train_data_loader, val_data_loader, device, epoch, print_freq):
+def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_freq, val_data_loader=None):
     model.train()
     train_metric_logger = utils.MetricLogger(delimiter="  ")
     train_metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
@@ -92,7 +92,7 @@ def _get_iou_types(model):
 
 
 @torch.no_grad()
-def evaluate(model, train_data_loader, val_data_loader, device):
+def evaluate(model, train_data_loader, device, val_data_loader=None):
     n_threads = torch.get_num_threads()
     torch.set_num_threads(1)
     cpu_device = torch.device("cpu")

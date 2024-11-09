@@ -114,7 +114,7 @@ def evaluate(model, val_data_loader, device, train_data_loader=None):
     :param device: torch.device
     :param train_data_loader: torch.utils.data.DataLoader (default=None)
     :return: train_coco_evaluator: CocoEvaluator, 
-             val_coco_evaluator: CocoEvaluator (if train_data_loader is not None)
+             val_coco_evaluator: CocoEvaluator (if train_data_loader is not None else val_coco_evaluator)
     """
     
     n_threads = torch.get_num_threads()

@@ -9,11 +9,6 @@ from coco_utils import get_coco_api_from_dataset
 from coco_eval import CocoEvaluator
 import utils
 
-def adjust_learning_rate(optimizer, scale_factor):
-    for param_group in optimizer.param_groups:
-        param_group['lr'] *= scale_factor
-
-
 def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_freq, accumulation_steps, val_data_loader=None, profiler=None):
     model.train()
     train_metric_logger = utils.MetricLogger(delimiter="  ")
@@ -26,12 +21,6 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
         warmup_iters = min(1000, len(train_data_loader) - 1)
         lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)
 
-    # Calculate the effective batch size and scale the learning rate
-    original_batch_size = train_data_loader.batch_size
-    effective_batch_size = original_batch_size * accumulation_steps
-    scale_factor = effective_batch_size / original_batch_size
-    adjust_learning_rate(optimizer, scale_factor)
-
     # Use profiler if provided, otherwise use nullcontext
     profiler_context = profiler if profiler else contextlib.nullcontext()
 
@@ -41,10 +30,7 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
     with profiler_context:
         for i, (images, targets) in enumerate(train_metric_logger.log_every(train_data_loader, print_freq, train_header)):
             images = list(image.to(device) for image in images)
-            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-
-            if i % accumulation_steps == 0:
-                optimizer.zero_grad()
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]                
 
             # Use autocast for mixed precision
             with torch.amp.autocast(device_type="cuda"):
@@ -55,10 +41,9 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
             scaler.scale(train_losses).backward()
 
             # Update weights after accumulation steps
-            if (i + 1) % accumulation_steps == 0:
-                # Apply gradient clipping
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if ((i + 1) % accumulation_steps == 0) or ((i + 1) == len(train_data_loader)):
                 scaler.step(optimizer)
+                optimizer.zero_grad()
                 scaler.update()
 
             # Reduce losses over all GPUs for logging purposes

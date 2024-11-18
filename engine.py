@@ -3,7 +3,6 @@ import sys
 import time
 import contextlib
 import torch
-from torch.amp import autocast
 import torchvision.models.detection.mask_rcnn
 from coco_utils import get_coco_api_from_dataset
 from coco_eval import CocoEvaluator
@@ -25,6 +24,8 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
     # Use profiler if provided, otherwise use nullcontext
     profiler_context = profiler if profiler else contextlib.nullcontext()
 
+    scaler = torch.amp.GradScaler()
+
     with profiler_context:
         for images, targets in train_metric_logger.log_every(train_data_loader, print_freq, train_header):
             images = list(image.to(device) for image in images)
@@ -33,15 +34,16 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
             optimizer.zero_grad()
 
             # Use autocast for mixed precision
-            with autocast(device_type="cuda"):
+            with torch.amp.autocast(device_type="cuda"):
                 train_loss_dict = model(images, targets)
                 train_losses = sum(loss for loss in train_loss_dict.values())
 
             # Backward pass
-            train_losses.backward()
+            scaler.scale(train_losses).backward()
 
             # Update weights
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             # Reduce losses over all GPUs for logging purposes
             train_loss_dict_reduced = utils.reduce_dict(train_loss_dict)
@@ -70,7 +72,7 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
                     images = list(image.to(device) for image in images)
                     targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-                    with autocast(device_type="cuda"):
+                    with torch.amp.autocast(device_type="cuda"):
                         val_loss_dict = model(images, targets)
                         val_loss_dict_reduced = utils.reduce_dict(val_loss_dict)
                         val_losses_reduced = sum(loss for loss in val_loss_dict_reduced.values())
@@ -122,7 +124,9 @@ def evaluate(model, val_data_loader, device, train_data_loader=None, profiler=No
     val_coco = get_coco_api_from_dataset(val_data_loader.dataset)
     val_coco_evaluator = CocoEvaluator(val_coco, iou_types)
 
-    with profiler:    
+    profiler_context = profiler if profiler else contextlib.nullcontext()
+
+    with profiler_context:    
         if train_data_loader is not None:
             train_metric_logger = utils.MetricLogger(delimiter="  ")
             train_coco = get_coco_api_from_dataset(train_data_loader.dataset)
@@ -135,7 +139,7 @@ def evaluate(model, val_data_loader, device, train_data_loader=None, profiler=No
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 model_time = time.time()
-                with autocast(device_type="cuda"):
+                with torch.amp.autocast():
                     outputs = model(images)
 
                 outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
@@ -149,7 +153,7 @@ def evaluate(model, val_data_loader, device, train_data_loader=None, profiler=No
 
             # Gather the stats from all processes
             train_metric_logger.synchronize_between_processes()
-            print("Averaged stats:", train_metric_logger)
+            print("Training Performance:", train_metric_logger)
             train_coco_evaluator.synchronize_between_processes()
 
             # Accumulate predictions from all images
@@ -163,7 +167,7 @@ def evaluate(model, val_data_loader, device, train_data_loader=None, profiler=No
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             model_time = time.time()
-            with autocast(device_type="cuda"):
+            with torch.amp.autocast():
                 outputs = model(images)
 
             outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
@@ -177,10 +181,8 @@ def evaluate(model, val_data_loader, device, train_data_loader=None, profiler=No
 
         # Gather the stats from all processes
         val_metric_logger.synchronize_between_processes()
-        print("Averaged stats:", val_metric_logger)
+        print("Validation Performance:", val_metric_logger)
         val_coco_evaluator.synchronize_between_processes()
-
-        # Accumulate predictions from all images
         val_coco_evaluator.accumulate()
         val_coco_evaluator.summarize()
 

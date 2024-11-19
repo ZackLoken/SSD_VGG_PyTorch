@@ -9,3 +9,4 @@ __pycache__/coco_eval.cpython-39.pyc
 /runs
 *.pth
 /ray_results
+*.pyc

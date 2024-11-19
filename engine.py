@@ -139,7 +139,7 @@ def evaluate(model, val_data_loader, device, train_data_loader=None, profiler=No
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 model_time = time.time()
-                with torch.amp.autocast():
+                with torch.amp.autocast(device_type="cuda"):
                     outputs = model(images)
 
                 outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
@@ -167,7 +167,7 @@ def evaluate(model, val_data_loader, device, train_data_loader=None, profiler=No
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             model_time = time.time()
-            with torch.amp.autocast():
+            with torch.amp.autocast(device_type="cuda"):
                 outputs = model(images)
 
             outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]

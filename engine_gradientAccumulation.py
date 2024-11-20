@@ -1,10 +1,8 @@
 import math
 import sys
 import time
-import contextlib
 import torch
 import torchvision.models.detection.mask_rcnn
-
 from coco_utils import get_coco_api_from_dataset
 from coco_eval import CocoEvaluator
 import utils
@@ -117,7 +115,7 @@ def _get_iou_types(model):
 
 
 @torch.no_grad()
-def evaluate(model, val_data_loader, device, train_data_loader=None):
+def evaluate(model, val_data_loader, val_coco_ds, device, train_data_loader=None, train_coco_ds=None):
     """
     Evaluate model on validation dataset and return validation accuracy to metric logger. If training dataset is provided,
     also return training accuracy to metric logger.
@@ -125,6 +123,8 @@ def evaluate(model, val_data_loader, device, train_data_loader=None):
     :param val_data_loader: torch.utils.data.DataLoader
     :param device: torch.device
     :param train_data_loader: torch.utils.data.DataLoader (default=None)
+    :param val_coco_ds: COCO dataset object for validation (precomputed)
+    :param train_coco_ds: COCO dataset object for training (precomputed)
     :return: train_coco_evaluator: CocoEvaluator, 
              val_coco_evaluator: CocoEvaluator (if train_data_loader is not None else val_coco_evaluator)
     """
@@ -133,17 +133,18 @@ def evaluate(model, val_data_loader, device, train_data_loader=None):
     torch.set_num_threads(1)
     cpu_device = torch.device("cpu")
     model.eval()
-    iou_types = _get_iou_types(model)
 
     val_metric_logger = utils.MetricLogger(delimiter="  ")
-    val_coco = get_coco_api_from_dataset(val_data_loader.dataset)
-    val_coco_evaluator = CocoEvaluator(val_coco, iou_types)
+    train_metric_logger = utils.MetricLogger(delimiter="  ") if train_data_loader is not None else None
+
+    iou_types = _get_iou_types(model)
 
     if train_data_loader is not None:
-        train_metric_logger = utils.MetricLogger(delimiter="  ")
-        train_coco = get_coco_api_from_dataset(train_data_loader.dataset)
-        train_coco_evaluator = CocoEvaluator(train_coco, iou_types)
-
+        # Use precomputed train_coco_ds if provided, otherwise create it
+        if train_coco_ds is None:
+            train_coco_ds = get_coco_api_from_dataset(train_data_loader.dataset)
+        train_coco_evaluator = CocoEvaluator(train_coco_ds, iou_types)
+        
         # Calculate training accuracy
         for images, targets in train_metric_logger.log_every(train_data_loader, len(train_data_loader) // 3, 'Training Accuracy: '):
             images = list(img.to(device) for img in images)
@@ -171,6 +172,9 @@ def evaluate(model, val_data_loader, device, train_data_loader=None):
         # Accumulate predictions from all images
         train_coco_evaluator.accumulate()
         train_coco_evaluator.summarize()
+    
+    # Use precomputed val_coco_ds
+    val_coco_evaluator = CocoEvaluator(val_coco_ds, iou_types)
 
     # Calculate validation accuracy
     for images, targets in val_metric_logger.log_every(val_data_loader, len(val_data_loader) // 2, 'Validation Accuracy: '):

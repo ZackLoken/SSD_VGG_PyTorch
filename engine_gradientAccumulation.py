@@ -55,6 +55,9 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
             scaler.step(optimizer)
             scaler.update()
 
+            if lr_scheduler is not None:
+                lr_scheduler.step()
+
         # Reduce losses over all GPUs for logging purposes
         train_loss_dict_reduced = utils.reduce_dict(train_loss_dict)
         train_losses_reduced = sum(loss for loss in train_loss_dict_reduced.values())
@@ -64,9 +67,6 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
             print(f"Loss is {train_loss_value}, stopping training")
             print(train_loss_dict_reduced)
             sys.exit(1)
-
-        if lr_scheduler is not None:
-            lr_scheduler.step()
 
         train_metric_logger.update(loss=train_losses_reduced, **train_loss_dict_reduced)
         train_metric_logger.update(lr=optimizer.param_groups[0]["lr"])
@@ -100,7 +100,6 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
     reset_learning_rate(optimizer, accumulation_steps)
 
     return train_metric_logger, val_metric_logger if val_data_loader is not None else train_metric_logger
-
 
 def _get_iou_types(model):
     model_without_ddp = model

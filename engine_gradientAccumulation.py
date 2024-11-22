@@ -45,10 +45,22 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
         with torch.amp.autocast(device_type="cuda"):
             train_loss_dict = model(images, targets)
 
+        # Debugging: check for NaNs in the forward pass
+        for loss_name, loss in train_loss_dict.items():
+            if not torch.isfinite(loss).all():
+                print(f"NaN detected in {loss_name} in the forward pass!")
+                print(f"Loss values: {train_loss_dict}")
+                sys.exit(1)
+
         train_losses = sum(loss for loss in train_loss_dict.values())
 
         # Scale the loss and backward pass
         scaler.scale(train_losses).backward()
+
+        # Check NaNs after the backward pass (if any)
+        if any(torch.isnan(p).any() for p in model.parameters()):
+            print("NaNs detected in model parameters after backward pass!")
+            sys.exit(1)
 
         # Update weights after accumulation steps
         if ((i + 1) % accumulation_steps == 0) or ((i + 1) == len(train_data_loader)):
@@ -70,6 +82,7 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
 
         train_metric_logger.update(loss=train_losses_reduced, **train_loss_dict_reduced)
         train_metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
 
     # validation loop
     if val_data_loader is not None:
@@ -99,7 +112,11 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
 
     reset_learning_rate(optimizer, accumulation_steps)
 
-    return train_metric_logger, val_metric_logger if val_data_loader is not None else train_metric_logger
+    if val_data_loader is not None:
+        return train_metric_logger, val_metric_logger
+    else:
+        return train_metric_logger
+
 
 def _get_iou_types(model):
     model_without_ddp = model
@@ -138,6 +155,7 @@ def evaluate(model, val_data_loader, val_coco_ds, device, train_data_loader=None
 
     iou_types = _get_iou_types(model)
 
+    train_coco_evaluator = None
     if train_data_loader is not None:
         # Use precomputed train_coco_ds if provided, otherwise create it
         if train_coco_ds is None:
@@ -203,4 +221,7 @@ def evaluate(model, val_data_loader, val_coco_ds, device, train_data_loader=None
 
     torch.set_num_threads(n_threads)
 
-    return train_coco_evaluator, val_coco_evaluator if train_data_loader is not None else val_coco_evaluator
+    if train_data_loader is not None:
+        return train_coco_evaluator, val_coco_evaluator
+    else:
+        return val_coco_evaluator

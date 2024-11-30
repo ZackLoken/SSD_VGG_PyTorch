@@ -8,16 +8,6 @@ from coco_eval import CocoEvaluator
 import utils
 
 
-def adjust_learning_rate(optimizer, scale_factor):
-    for param_group in optimizer.param_groups:
-        param_group['lr'] *= scale_factor
-
-
-def reset_learning_rate(optimizer, scale_factor):
-    for param_group in optimizer.param_groups:
-        param_group['lr'] /= scale_factor
-      
-        
 def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_freq, accumulation_steps, val_data_loader=None):
     model.train()
     train_metric_logger = utils.MetricLogger(delimiter="  ")
@@ -29,8 +19,6 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
         warmup_factor = 1. / 1000
         warmup_iters = min(1000, len(train_data_loader) - 1)
         lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)
-
-    adjust_learning_rate(optimizer, scale_factor=accumulation_steps)
 
     # Initialize gradient scaler for mixed precision training
     scaler = torch.amp.GradScaler()
@@ -83,7 +71,6 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
         train_metric_logger.update(loss=train_losses_reduced, **train_loss_dict_reduced)
         train_metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
-
     # validation loop
     if val_data_loader is not None:
         val_metric_logger = utils.MetricLogger(delimiter="  ")
@@ -109,8 +96,6 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
 
                 val_metric_logger.update(loss=val_losses_reduced, **val_loss_dict_reduced)
                 val_metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-
-    reset_learning_rate(optimizer, accumulation_steps)
 
     if val_data_loader is not None:
         return train_metric_logger, val_metric_logger

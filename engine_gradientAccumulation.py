@@ -21,7 +21,7 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
         lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)
 
     # Initialize gradient scaler for mixed precision training
-    scaler = torch.amp.GradScaler()
+    scaler = torch.GradScaler(device)
 
     for i, (images, targets) in enumerate(train_metric_logger.log_every(train_data_loader, print_freq, train_header)):
         images = list(image.to(device) for image in images)
@@ -30,7 +30,7 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
         optimizer.zero_grad()
 
         # Use autocast for mixed precision
-        with torch.amp.autocast(device_type="cuda"):
+        with torch.autocast(device_type=device):
             train_loss_dict = model(images, targets)
 
         # Debugging: check for NaNs in the forward pass
@@ -82,7 +82,7 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
                 images = list(image.to(device) for image in images)
                 targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-                with torch.amp.autocast(device_type="cuda"):
+                with torch.autocast(device_type=device):
                     val_loss_dict = model(images, targets)
 
                 val_loss_dict_reduced = utils.reduce_dict(val_loss_dict)
@@ -154,7 +154,7 @@ def evaluate(model, val_data_loader, val_coco_ds, device, train_data_loader=None
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
             model_time = time.time()
-            with torch.amp.autocast(device_type="cuda"):
+            with torch.autocast(device_type=device):
                 outputs = model(images)
 
             outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]
@@ -185,7 +185,7 @@ def evaluate(model, val_data_loader, val_coco_ds, device, train_data_loader=None
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         model_time = time.time()
-        with torch.amp.autocast(device_type="cuda"):
+        with torch.autocast(device_type=device):
             outputs = model(images)
 
         outputs = [{k: v.to(cpu_device) for k, v in t.items()} for t in outputs]

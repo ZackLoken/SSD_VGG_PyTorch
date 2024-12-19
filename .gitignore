@@ -10,3 +10,6 @@ __pycache__/coco_eval.cpython-39.pyc
 *.pth
 /ray_results
 *.pyc
+/prometheus-3.0.1.windows-amd64
+/data
+prometheus-3.0.1.windows-AMD64.tar.gz

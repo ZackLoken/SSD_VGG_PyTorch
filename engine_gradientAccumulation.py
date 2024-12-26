@@ -18,7 +18,8 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
     if epoch == 0:
         warmup_factor = 1. / 1000
         warmup_iters = min(1000, len(train_data_loader) - 1)
-        lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)
+
+        lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor, accumulation_steps)
 
     # Initialize gradient scaler for mixed precision training
     scaler = torch.GradScaler(device)
@@ -43,7 +44,7 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
         train_losses = sum(loss for loss in train_loss_dict.values())
 
         # Scale the loss and backward pass
-        scaler.scale(train_losses).backward()
+        scaler.scale(train_losses / accumulation_steps).backward()
 
         # Check NaNs after the backward pass (if any)
         if any(torch.isnan(p).any() for p in model.parameters()):

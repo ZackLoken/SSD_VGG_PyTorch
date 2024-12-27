@@ -208,10 +208,11 @@ def collate_fn(batch):
 
 
 def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor, accumulation_steps):
+    adjusted_warmup_iters = warmup_iters // accumulation_steps
     def f(x):
-        if x >= warmup_iters * accumulation_steps:
+        if x >= adjusted_warmup_iters:
             return 1
-        alpha = float(x) / (warmup_iters * accumulation_steps)
+        alpha = float(x) / adjusted_warmup_iters
         return warmup_factor * (1 - alpha) + alpha
     return torch.optim.lr_scheduler.LambdaLR(optimizer, f)
 

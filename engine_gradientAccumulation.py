@@ -17,9 +17,9 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
     lr_scheduler = None
     if epoch == 0:
         warmup_factor = 1. / 1000
-        warmup_iters = min(1000, len(train_data_loader) - 1)
+        warmup_iters = min(1000, len(train_data_loader) // accumulation_steps - 1)
 
-        lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor, accumulation_steps)
+        lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)
 
     # Initialize gradient scaler for mixed precision training
     scaler = torch.GradScaler(device)

@@ -28,36 +28,14 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        optimizer.zero_grad()
+        # Zero the gradients before the forward pass
+        if (i % accumulation_steps == 0):
+            optimizer.zero_grad()
 
         # Use autocast for mixed precision
         with torch.autocast(device_type=device):
             train_loss_dict = model(images, targets)
-
-        # Debugging: check for NaNs in the forward pass
-        for loss_name, loss in train_loss_dict.items():
-            if not torch.isfinite(loss).all():
-                print(f"NaN detected in {loss_name} in the forward pass!")
-                print(f"Loss values: {train_loss_dict}")
-                sys.exit(1)
-
-        train_losses = sum(loss for loss in train_loss_dict.values())
-
-        # Scale the loss and backward pass
-        scaler.scale(train_losses / accumulation_steps).backward()
-
-        # Check NaNs after the backward pass (if any)
-        if any(torch.isnan(p).any() for p in model.parameters()):
-            print("NaNs detected in model parameters after backward pass!")
-            sys.exit(1)
-
-        # Update weights after accumulation steps
-        if ((i + 1) % accumulation_steps == 0) or ((i + 1) == len(train_data_loader)):
-            scaler.step(optimizer)
-            scaler.update()
-
-            if lr_scheduler is not None:
-                lr_scheduler.step()
+            train_losses = sum(loss for loss in train_loss_dict.values()) / accumulation_steps
 
         # Reduce losses over all GPUs for logging purposes
         train_loss_dict_reduced = utils.reduce_dict(train_loss_dict)
@@ -68,6 +46,17 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
             print(f"Loss is {train_loss_value}, stopping training")
             print(train_loss_dict_reduced)
             sys.exit(1)
+
+        # Scale the loss and backward pass
+        scaler.scale(train_losses).backward()
+
+        # Update weights after accumulation steps
+        if ((i + 1) % accumulation_steps == 0) or ((i + 1) == len(train_data_loader)):
+            scaler.step(optimizer)
+            scaler.update()
+
+            if lr_scheduler is not None:
+                lr_scheduler.step()
 
         train_metric_logger.update(loss=train_losses_reduced, **train_loss_dict_reduced)
         train_metric_logger.update(lr=optimizer.param_groups[0]["lr"])
@@ -169,7 +158,7 @@ def evaluate(model, val_data_loader, val_coco_ds, device, train_data_loader=None
 
         # Gather the stats from all processes
         train_metric_logger.synchronize_between_processes()
-        print("Training Performance:", train_metric_logger)
+        print("Training Performance: ", train_metric_logger)
         train_coco_evaluator.synchronize_between_processes()
 
         # Accumulate predictions from all images
@@ -200,7 +189,7 @@ def evaluate(model, val_data_loader, val_coco_ds, device, train_data_loader=None
 
     # Gather the stats from all processes
     val_metric_logger.synchronize_between_processes()
-    print("Validation Performance:", val_metric_logger)
+    print("Validation Performance: ", val_metric_logger)
     val_coco_evaluator.synchronize_between_processes()
     val_coco_evaluator.accumulate()
     val_coco_evaluator.summarize()

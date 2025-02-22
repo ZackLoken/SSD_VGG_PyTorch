@@ -8,17 +8,17 @@ from coco_eval import CocoEvaluator
 import utils
 
 
-def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_freq, accumulation_steps, val_data_loader=None):
+def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_freq, accumulation_steps, val_data_loader=None, step_epoch_counter=None):
     model.train()
     train_metric_logger = utils.MetricLogger(delimiter="  ")
     train_metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     train_header = 'Epoch: [{}] Training'.format(epoch)
 
     lr_scheduler = None
-    if epoch == 0:
+    # Apply warmup only at the start of each training step
+    if step_epoch_counter == 0:
         warmup_factor = 1. / 1000
         warmup_iters = min(1000, len(train_data_loader) // accumulation_steps - 1)
-
         lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)
 
     # Initialize gradient scaler for mixed precision training
@@ -159,6 +159,7 @@ def evaluate(model, val_data_loader, val_coco_ds, device, train_data_loader=None
         # Gather the stats from all processes
         train_metric_logger.synchronize_between_processes()
         print("Training Performance: ", train_metric_logger)
+        print()
         train_coco_evaluator.synchronize_between_processes()
 
         # Accumulate predictions from all images
@@ -190,6 +191,7 @@ def evaluate(model, val_data_loader, val_coco_ds, device, train_data_loader=None
     # Gather the stats from all processes
     val_metric_logger.synchronize_between_processes()
     print("Validation Performance: ", val_metric_logger)
+    print()
     val_coco_evaluator.synchronize_between_processes()
     val_coco_evaluator.accumulate()
     val_coco_evaluator.summarize()

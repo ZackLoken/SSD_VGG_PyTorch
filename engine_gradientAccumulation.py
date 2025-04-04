@@ -16,7 +16,7 @@ def train_one_epoch(model, optimizer, train_data_loader, device, epoch, print_fr
 
     lr_scheduler = None
     # Apply warmup only at the start of each training step
-    if step_epoch_counter == 0:
+    if step_epoch_counter == 0 or step_epoch_counter == 1:
         warmup_factor = 1. / 1000
         warmup_iters = min(1000, len(train_data_loader) // accumulation_steps - 1)
         lr_scheduler = utils.warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor)

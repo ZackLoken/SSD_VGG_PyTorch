@@ -1630,16 +1630,13 @@ def evaluate_full_dataset(model, device='cuda:0', score_thresh=0.5,
     
     model = model.to(device='cuda:0', dtype=torch.float32)
 
-    # full_dataset = MAVdroneDataset(
-    #     csv_file='C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/preprocessed_annotations.csv',
-    #     root_dir='C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/filtered_images/',
-    #     transforms=get_transform(train=False)
-    # )
+    full_dataset = MAVdroneDataset(
+        csv_file='C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/preprocessed_annotations.csv',
+        root_dir='C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/filtered_images/',
+        transforms=get_transform(train=False)
+    )
 
-    # full_coco_ds = get_coco_api_from_dataset(full_dataset)
-
-    full_dataset = dataset_test
-    full_coco_ds = test_coco_ds
+    full_coco_ds = get_coco_api_from_dataset(full_dataset)
 
     full_data_loader = torch.utils.data.DataLoader(
         full_dataset, batch_size=1, shuffle=False,

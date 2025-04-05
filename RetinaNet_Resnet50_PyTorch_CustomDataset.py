@@ -915,7 +915,7 @@ class BestTrial:
     def __init__(self):
         # Initialize default config first
         self.config = {
-            # "lr": 0.001181,
+            "lr": 0.001181,
             "resnet_depth": 50,
             "momentum": 0.973758,
             "weight_decay": 1.42512e-05,
@@ -928,12 +928,12 @@ class BestTrial:
             "beta_loss": 0.6,
             "lambda_loss": 1.2,
             "nms_score": 0.6,
-            "nms_sigma": 0.25,
+            "nms_sigma": 0.3,
             "class_weights": train_class_weights,
             "train_sampler": train_sampler,
         }
 
-        self.config["lr"] = self.train_lr_finder()
+        # self.config["lr"] = self.train_lr_finder()
 
     def train_lr_finder(self):
         class CustomTrainDataLoaderIter(TrainDataLoaderIter):
@@ -1620,18 +1620,22 @@ visualize_predictions(model, data_loader_test, device='cpu', epoch=best_train_ep
 
 import seaborn as sns
 
-def evaluate_full_dataset(model, device='cuda:0', output_dir=f'C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/full_dataset_evaluation/{current_datetime}'):
+def evaluate_full_dataset(model, device='cuda:0', score_thresh=0.5, 
+                          output_dir=f'C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/full_dataset_evaluation/{current_datetime}'):
     """Evaluate model on full dataset and save comprehensive results"""
     
     model = model.to(device='cuda:0', dtype=torch.float32)
 
-    full_dataset = MAVdroneDataset(
-        csv_file='C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/preprocessed_annotations.csv',
-        root_dir='C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/filtered_images/',
-        transforms=get_transform(train=False)
-    )
+    # full_dataset = MAVdroneDataset(
+    #     csv_file='C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/preprocessed_annotations.csv',
+    #     root_dir='C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/filtered_images/',
+    #     transforms=get_transform(train=False)
+    # )
 
-    full_coco_ds = get_coco_api_from_dataset(full_dataset)
+    # full_coco_ds = get_coco_api_from_dataset(full_dataset)
+
+    full_dataset = dataset_test
+    full_coco_ds = test_coco_ds
 
     full_data_loader = torch.utils.data.DataLoader(
         full_dataset, batch_size=1, shuffle=False,
@@ -1744,9 +1748,9 @@ def evaluate_full_dataset(model, device='cuda:0', output_dir=f'C:/Users/exx/Deep
 
     # Initialize confusion matrices
     confusion_matrices = {
-    'IoU_0.50': np.zeros((n_classes, n_classes), dtype=np.int32),
-    'IoU_0.75': np.zeros((n_classes, n_classes), dtype=np.int32),
-    'IoU_0.50:0.95': np.zeros((n_classes, n_classes))  # Keep float for average
+    'IoU=0.50': np.zeros((n_classes, n_classes), dtype=np.int32),
+    'IoU=0.75': np.zeros((n_classes, n_classes), dtype=np.int32),
+    'IoU=0.50:0.95': np.zeros((n_classes, n_classes))  # Keep float for average
     }
 
     # Match predictions to ground truth using different IoU thresholds
@@ -1775,14 +1779,14 @@ def evaluate_full_dataset(model, device='cuda:0', output_dir=f'C:/Users/exx/Deep
                         pred_matched = set()
                         
                         for pred_idx in range(len(pred_boxes)):
-                            if pred_scores[pred_idx] < 0.1:
+                            if pred_scores[pred_idx] < score_thresh:
                                 continue
                                 
                             valid_matches = np.where(ious[pred_idx] >= iou_thresh)[0]
                             if len(valid_matches) > 0:
                                 best_gt_idx = valid_matches[np.argmax(ious[pred_idx][valid_matches])]
                                 if best_gt_idx not in gt_matched:
-                                    confusion_matrices[f'IoU_{iou_thresh:.2f}'][
+                                    confusion_matrices[f'IoU={iou_thresh:.2f}'][
                                         gt_labels[best_gt_idx], 
                                         pred_labels[pred_idx]
                                     ] += 1
@@ -1791,13 +1795,13 @@ def evaluate_full_dataset(model, device='cuda:0', output_dir=f'C:/Users/exx/Deep
                         
                         # Add false positives
                         for pred_idx in range(len(pred_boxes)):
-                            if pred_idx not in pred_matched and pred_scores[pred_idx] >= 0.1:
-                                confusion_matrices[f'IoU_{iou_thresh:.2f}'][-1, pred_labels[pred_idx]] += 1
+                            if pred_idx not in pred_matched and pred_scores[pred_idx] >= score_thresh:
+                                confusion_matrices[f'IoU={iou_thresh:.2f}'][-1, pred_labels[pred_idx]] += 1
                         
                         # Add false negatives
                         for gt_idx in range(len(gt_boxes)):
                             if gt_idx not in gt_matched:
-                                confusion_matrices[f'IoU_{iou_thresh:.2f}'][gt_labels[gt_idx], -1] += 1
+                                confusion_matrices[f'IoU={iou_thresh:.2f}'][gt_labels[gt_idx], -1] += 1
                     
                     # Process IoU range 0.5:0.95
                     temp_matrices = []
@@ -1807,7 +1811,7 @@ def evaluate_full_dataset(model, device='cuda:0', output_dir=f'C:/Users/exx/Deep
                         pred_matched = set()
                         
                         for pred_idx in range(len(pred_boxes)):
-                            if pred_scores[pred_idx] < 0.1:
+                            if pred_scores[pred_idx] < score_thresh:
                                 continue
                                 
                             valid_matches = np.where(ious[pred_idx] >= iou_thresh)[0]
@@ -1820,7 +1824,7 @@ def evaluate_full_dataset(model, device='cuda:0', output_dir=f'C:/Users/exx/Deep
                         
                         # Add false positives and negatives
                         for pred_idx in range(len(pred_boxes)):
-                            if pred_idx not in pred_matched and pred_scores[pred_idx] >= 0.1:
+                            if pred_idx not in pred_matched and pred_scores[pred_idx] >= score_thresh:
                                 temp_mat[-1, pred_labels[pred_idx]] += 1
                         
                         for gt_idx in range(len(gt_boxes)):
@@ -1830,7 +1834,7 @@ def evaluate_full_dataset(model, device='cuda:0', output_dir=f'C:/Users/exx/Deep
                         temp_matrices.append(temp_mat)
                     
                     # Average the matrices for 0.5:0.95
-                    confusion_matrices['IoU_0.50:0.95'] += np.mean(temp_matrices, axis=0)
+                    confusion_matrices['IoU=0.50:0.95'] += np.mean(temp_matrices, axis=0)
 
     # Plot confusion matrices
     plt.figure(figsize=(30, 10))
@@ -1842,12 +1846,12 @@ def evaluate_full_dataset(model, device='cuda:0', output_dir=f'C:/Users/exx/Deep
         
         sns.heatmap(conf_mat, 
             annot=True, 
-            fmt='d' if 'IoU_0.50:0.95' not in iou_key else '.2f',  # Integer for single thresholds, float for average
+            fmt='d' if 'IoU=0.50:0.95' not in iou_key else '.2f',  # Integer for single thresholds, float for average
             cmap='Blues',
             xticklabels=labels, 
             yticklabels=labels)
         
-        if 'IoU_0.50:0.95' in iou_key:
+        if 'IoU=0.50:0.95' in iou_key:
             plt.title('Confusion Matrix Averaged Across IoU=[0.50:0.95]')
         else:
             plt.title(f'Confusion Matrix at {iou_key}')
@@ -1860,4 +1864,4 @@ def evaluate_full_dataset(model, device='cuda:0', output_dir=f'C:/Users/exx/Deep
 
     return metrics_df, class_metrics_df, pred_df
 
-evaluate_full_dataset(model, 'cuda:0')
+evaluate_full_dataset(model, 'cuda:0', score_thresh=0.5)

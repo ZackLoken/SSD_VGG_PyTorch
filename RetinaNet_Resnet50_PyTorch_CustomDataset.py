@@ -1343,10 +1343,14 @@ def main(best_trial):
             # Print per-class metrics
             print("Training Class Metrics:")
             for name, m in train_class_metrics.items():
-                print(f"Class: {name}, Precision: {m['precision']:.4f}, Recall: {m['recall']:.4f}")
+                print(f"Class: {name}, AP@0.50: {m['precision_50']:.4f}, AR@0.50: {m['recall_50']:.4f}, F1@0.50: {m['f1_50']:.4f}")
+                print(f"Class: {name}, AP@0.75: {m['precision_75']:.4f}, AR@0.75: {m['recall_75']:.4f}, F1@0.75: {m['f1_75']:.4f}")
+                print(f"Class: {name}, AP@[0.50:0.95]: {m['precision_50_95']:.4f}, AR@[0.50:0.95]: {m['recall_50_95']:.4f}, F1@[0.50:0.95]: {m['f1_50_95']:.4f}")
             print("\nValidation Class Metrics:")
             for name, m in val_class_metrics.items():
-                print(f"Class: {name}, Precision: {m['precision']:.4f}, Recall: {m['recall']:.4f}")
+                print(f"Class: {name}, AP@0.50: {m['precision_50']:.4f}, AR@0.50: {m['recall_50']:.4f}, F1@0.50: {m['f1_50']:.4f}")
+                print(f"Class: {name}, AP@0.75: {m['precision_75']:.4f}, AR@0.75: {m['recall_75']:.4f}, F1@0.75: {m['f1_75']:.4f}")
+                print(f"Class: {name}, AP@[0.50:0.95]: {m['precision_50_95']:.4f}, AR@[0.50:0.95]: {m['recall_50_95']:.4f}, F1@[0.50:0.95]: {m['f1_50_95']:.4f}")
             print()
 
             # Visualize predictions periodically

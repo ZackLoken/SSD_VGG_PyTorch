@@ -1109,6 +1109,7 @@ if __name__ == "__main__":
 
 from torch.utils.tensorboard import SummaryWriter
 from coco_utils import get_coco_api_from_dataset
+import math
 
 def visualize_predictions(model, data_loader, device, epoch, num_samples=2, label_dict=None, bbox_colors=None, plot=False,
                           output_dir='prediction_visualizations'):
@@ -1312,7 +1313,7 @@ def main(best_trial):
         variance_threshold = ts["variance_threshold"]
 
         # Calculate scaled learning rate for this step
-        scaled_lr = best_trial.config["lr"] * ((batch_size / training_steps[0]["batch_size"]) * accumulation_steps)
+        scaled_lr = best_trial.config["lr"] * math.sqrt((batch_size / training_steps[0]["batch_size"]) * accumulation_steps)
 
         # Adjust the trainable layers for this step
         adjust_trainable_layers(model, backbone_layers)

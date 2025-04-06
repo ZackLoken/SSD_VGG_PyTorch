@@ -657,16 +657,14 @@ class CustomRetinaNet(RetinaNet):
             image_scores = []
             image_labels = []
             
+            # Process each feature level
             for box_regression_per_level, logits_per_level, anchors_per_level in zip(
                 box_regression_per_image, logits_per_image, anchors_per_image
             ):
-                # Calculate scores for all classes
                 scores_per_level = torch.sigmoid(logits_per_level)  # (N, num_classes)
-                
-                # Only keep scores above threshold
                 keep_idxs = scores_per_level > self.score_thresh
                 
-                # Convert boxes for each class separately
+                # Class-specific NMS first
                 for class_idx in range(scores_per_level.shape[-1]):
                     class_scores = scores_per_level[:, class_idx]
                     class_keep = keep_idxs[:, class_idx]
@@ -674,14 +672,28 @@ class CustomRetinaNet(RetinaNet):
                     if class_keep.sum() == 0:
                         continue
                     
-                    # Get boxes for this class
+                    # Get boxes and scores for this class
                     class_boxes = self.box_coder.decode_single(
                         box_regression_per_level[class_keep],
                         anchors_per_level[class_keep]
                     )
                     class_boxes = box_ops.clip_boxes_to_image(class_boxes, image_shape)
+                    class_scores = class_scores[class_keep]
                     
-                    image_boxes.append(class_boxes)
+                    # Apply class-specific soft-NMS
+                    class_keep = batched_soft_nms(
+                        boxes=class_boxes,
+                        scores=class_scores,
+                        idxs=torch.zeros_like(class_scores, dtype=torch.long),  # Same class
+                        sigma=self.nms_sigma,
+                        score_threshold=self.nms_score,
+                    )
+                    
+                    # Keep top scoring boxes after class-specific NMS
+                    class_keep = class_keep[class_scores[class_keep].argsort(descending=True)]
+                    class_keep = class_keep[:self.detections_per_img]
+                    
+                    image_boxes.append(class_boxes[class_keep])
                     image_scores.append(class_scores[class_keep])
                     image_labels.append(torch.full_like(
                         class_scores[class_keep], class_idx, dtype=torch.int64
@@ -692,14 +704,41 @@ class CustomRetinaNet(RetinaNet):
                 image_scores = torch.cat(image_scores, dim=0)
                 image_labels = torch.cat(image_labels, dim=0)
                 
-                # Perform soft-NMS across all classes at once
-                keep = batched_soft_nms(
-                    boxes=image_boxes,
-                    scores=image_scores,
-                    idxs=image_labels,  # This ensures cross-class suppression
-                    sigma=self.nms_sigma,
-                    score_threshold=self.nms_score
-                )
+                # Global soft-NMS across all classes with score-weighted IoU
+                keep = []
+                remaining_indices = list(range(len(image_boxes)))
+                
+                while remaining_indices:
+                    # Get highest scoring box
+                    scores = image_scores[remaining_indices]
+                    current_idx = remaining_indices[scores.argmax()]
+                    keep.append(current_idx)
+                    
+                    if len(remaining_indices) == 1:
+                        break
+                        
+                    # Remove current index
+                    remaining_indices.remove(current_idx)
+                    
+                    # Calculate IoUs with remaining boxes
+                    current_box = image_boxes[current_idx:current_idx+1]
+                    remaining_boxes = image_boxes[remaining_indices]
+                    ious = box_ops.box_iou(current_box, remaining_boxes)[0]
+                    
+                    # Weight IoUs by score differences
+                    score_diffs = torch.abs(image_scores[current_idx] - image_scores[remaining_indices])
+                    weighted_ious = ious * torch.exp(-score_diffs / self.nms_sigma)
+                    
+                    # Update scores using weighted IoUs
+                    image_scores[remaining_indices] *= torch.exp(
+                        -weighted_ious ** 2 / self.nms_sigma
+                    )
+                    
+                    # Remove low scoring boxes
+                    keep_mask = image_scores[remaining_indices] > self.nms_score
+                    remaining_indices = [remaining_indices[i] for i in range(len(remaining_indices)) if keep_mask[i]]
+                
+                keep = torch.tensor(keep, device=image_boxes.device)
                 
                 # Sort by score and limit detections
                 keep = keep[image_scores[keep].argsort(descending=True)]
@@ -1073,6 +1112,7 @@ from coco_utils import get_coco_api_from_dataset
 
 def visualize_predictions(model, data_loader, device, epoch, num_samples=2, label_dict=None, bbox_colors=None, plot=False,
                           output_dir='prediction_visualizations'):
+    
     # Define ImageNet normalization parameters
     imagenet_mean = np.array([0.485, 0.456, 0.406])
     imagenet_std = np.array([0.229, 0.224, 0.225])
@@ -1624,11 +1664,11 @@ visualize_predictions(model, data_loader_test, device='cpu', epoch=best_train_ep
 
 import seaborn as sns
 
-def evaluate_full_dataset(model, device='cuda:0', score_thresh=0.5, 
+def evaluate_full_dataset(model, device='cuda:0', score_thresh=0.5,
                           output_dir=f'C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/full_dataset_evaluation/{current_datetime}'):
     """Evaluate model on full dataset and save comprehensive results"""
     
-    model = model.to(device='cuda:0', dtype=torch.float32)
+    model = model.to(device=device, dtype=torch.float32)
 
     full_dataset = MAVdroneDataset(
         csv_file='C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/preprocessed_annotations.csv',
@@ -1747,11 +1787,11 @@ def evaluate_full_dataset(model, device='cuda:0', score_thresh=0.5,
 
     n_classes = len(label_dict)
 
-    # Initialize confusion matrices
+    # Initialize confusion matrices with extra row/column for false positives/negatives
     confusion_matrices = {
-    'IoU=0.50': np.zeros((n_classes, n_classes), dtype=np.int32),
-    'IoU=0.75': np.zeros((n_classes, n_classes), dtype=np.int32),
-    'IoU=0.50:0.95': np.zeros((n_classes, n_classes))  # Keep float for average
+        'IoU=0.50': np.zeros((n_classes+1, n_classes+1), dtype=np.int32),
+        'IoU=0.75': np.zeros((n_classes+1, n_classes+1), dtype=np.int32),
+        'IoU=0.50:0.95': np.zeros((n_classes+1, n_classes+1))  # Keep float for average
     }
 
     # Match predictions to ground truth using different IoU thresholds
@@ -1762,10 +1802,16 @@ def evaluate_full_dataset(model, device='cuda:0', score_thresh=0.5,
             
             for output, target in zip(outputs, targets):
                 gt_boxes = target['boxes'].cpu().numpy()
-                gt_labels = target['labels'].cpu().numpy() - 1
+                gt_labels = target['labels'].cpu().numpy()
                 pred_boxes = output['boxes'].cpu().numpy()
                 pred_scores = output['scores'].cpu().numpy()
-                pred_labels = output['labels'].cpu().numpy() - 1
+                pred_labels = output['labels'].cpu().numpy()
+                
+                # Filter out predictions below threshold
+                valid_preds = pred_scores >= score_thresh
+                pred_boxes = pred_boxes[valid_preds]
+                pred_labels = pred_labels[valid_preds]
+                pred_scores = pred_scores[valid_preds]
                 
                 # Calculate IoU between each pred box and gt box
                 if len(pred_boxes) > 0 and len(gt_boxes) > 0:
@@ -1776,61 +1822,98 @@ def evaluate_full_dataset(model, device='cuda:0', score_thresh=0.5,
                     
                     # Process single IoU thresholds (0.5 and 0.75)
                     for iou_thresh in iou_thresholds:
+                        iou_key = f'IoU={iou_thresh:.2f}'
                         gt_matched = set()
                         pred_matched = set()
                         
-                        for pred_idx in range(len(pred_boxes)):
-                            if pred_scores[pred_idx] < score_thresh:
-                                continue
+                        # Sort predictions by confidence score (high to low)
+                        pred_order = np.argsort(-pred_scores)
+                        
+                        # Match each prediction to a ground truth box
+                        for pred_idx in pred_order:
+                            best_iou = -1
+                            best_gt_idx = -1
+                            
+                            # Find the best matching ground truth box
+                            for gt_idx in range(len(gt_boxes)):
+                                if gt_idx in gt_matched:
+                                    continue
+                                    
+                                iou = ious[pred_idx, gt_idx]
+                                if iou >= iou_thresh and iou > best_iou:
+                                    best_iou = iou
+                                    best_gt_idx = gt_idx
+                            
+                            # If a match is found, update confusion matrix
+                            if best_gt_idx != -1:
+                                gt_label_idx = gt_labels[best_gt_idx] - 1  # Adjust index (RetinaNet uses 1-indexed labels)
+                                pred_label_idx = pred_labels[pred_idx] - 1  # Adjust index
                                 
-                            valid_matches = np.where(ious[pred_idx] >= iou_thresh)[0]
-                            if len(valid_matches) > 0:
-                                best_gt_idx = valid_matches[np.argmax(ious[pred_idx][valid_matches])]
-                                if best_gt_idx not in gt_matched:
-                                    confusion_matrices[f'IoU={iou_thresh:.2f}'][
-                                        gt_labels[best_gt_idx], 
-                                        pred_labels[pred_idx]
-                                    ] += 1
-                                    gt_matched.add(best_gt_idx)
-                                    pred_matched.add(pred_idx)
+                                confusion_matrices[iou_key][gt_label_idx, pred_label_idx] += 1
+                                gt_matched.add(best_gt_idx)
+                                pred_matched.add(pred_idx)
                         
-                        # Add false positives
+                        # Add false positives (predictions with no matching ground truth)
                         for pred_idx in range(len(pred_boxes)):
-                            if pred_idx not in pred_matched and pred_scores[pred_idx] >= score_thresh:
-                                confusion_matrices[f'IoU={iou_thresh:.2f}'][-1, pred_labels[pred_idx]] += 1
+                            if pred_idx not in pred_matched:
+                                pred_label_idx = pred_labels[pred_idx] - 1  # Adjust index
+                                # Last row is for false positives
+                                confusion_matrices[iou_key][n_classes, pred_label_idx] += 1
                         
-                        # Add false negatives
+                        # Add false negatives (ground truths with no matching prediction)
                         for gt_idx in range(len(gt_boxes)):
                             if gt_idx not in gt_matched:
-                                confusion_matrices[f'IoU={iou_thresh:.2f}'][gt_labels[gt_idx], -1] += 1
+                                gt_label_idx = gt_labels[gt_idx] - 1  # Adjust index
+                                # Last column is for false negatives
+                                confusion_matrices[iou_key][gt_label_idx, n_classes] += 1
                     
                     # Process IoU range 0.5:0.95
                     temp_matrices = []
                     for iou_thresh in iou_range:
-                        temp_mat = np.zeros((n_classes, n_classes))
+                        temp_mat = np.zeros((n_classes+1, n_classes+1))
                         gt_matched = set()
                         pred_matched = set()
                         
-                        for pred_idx in range(len(pred_boxes)):
-                            if pred_scores[pred_idx] < score_thresh:
-                                continue
+                        # Sort predictions by confidence score (high to low)
+                        pred_order = np.argsort(-pred_scores)
+                        
+                        # Match each prediction to a ground truth box
+                        for pred_idx in pred_order:
+                            best_iou = -1
+                            best_gt_idx = -1
+                            
+                            # Find the best matching ground truth box
+                            for gt_idx in range(len(gt_boxes)):
+                                if gt_idx in gt_matched:
+                                    continue
+                                    
+                                iou = ious[pred_idx, gt_idx]
+                                if iou >= iou_thresh and iou > best_iou:
+                                    best_iou = iou
+                                    best_gt_idx = gt_idx
+                            
+                            # If a match is found, update confusion matrix
+                            if best_gt_idx != -1:
+                                gt_label_idx = gt_labels[best_gt_idx] - 1  # Adjust index
+                                pred_label_idx = pred_labels[pred_idx] - 1  # Adjust index
                                 
-                            valid_matches = np.where(ious[pred_idx] >= iou_thresh)[0]
-                            if len(valid_matches) > 0:
-                                best_gt_idx = valid_matches[np.argmax(ious[pred_idx][valid_matches])]
-                                if best_gt_idx not in gt_matched:
-                                    temp_mat[gt_labels[best_gt_idx], pred_labels[pred_idx]] += 1
-                                    gt_matched.add(best_gt_idx)
-                                    pred_matched.add(pred_idx)
+                                temp_mat[gt_label_idx, pred_label_idx] += 1
+                                gt_matched.add(best_gt_idx)
+                                pred_matched.add(pred_idx)
                         
-                        # Add false positives and negatives
+                        # Add false positives (predictions with no matching ground truth)
                         for pred_idx in range(len(pred_boxes)):
-                            if pred_idx not in pred_matched and pred_scores[pred_idx] >= score_thresh:
-                                temp_mat[-1, pred_labels[pred_idx]] += 1
+                            if pred_idx not in pred_matched:
+                                pred_label_idx = pred_labels[pred_idx] - 1  # Adjust index
+                                # Last row is for false positives
+                                temp_mat[n_classes, pred_label_idx] += 1
                         
+                        # Add false negatives (ground truths with no matching prediction)
                         for gt_idx in range(len(gt_boxes)):
                             if gt_idx not in gt_matched:
-                                temp_mat[gt_labels[gt_idx], -1] += 1
+                                gt_label_idx = gt_labels[gt_idx] - 1  # Adjust index
+                                # Last column is for false negatives
+                                temp_mat[gt_label_idx, n_classes] += 1
                         
                         temp_matrices.append(temp_mat)
                     
@@ -1842,22 +1925,25 @@ def evaluate_full_dataset(model, device='cuda:0', score_thresh=0.5,
     for idx, (iou_key, conf_mat) in enumerate(confusion_matrices.items()):
         plt.subplot(1, 3, idx + 1)
         
-        # Create labels list with class names
+        # Create labels list with class names plus FP/FN labels
         labels = [label_dict[i+1] for i in range(n_classes)]
+        labels.append("False Pos")  
+        labels_with_fn = labels.copy()[:-1]  # Remove False Pos for x-axis
+        labels_with_fn.append("False Neg") 
         
         sns.heatmap(conf_mat, 
             annot=True, 
-            fmt='d' if 'IoU=0.50:0.95' not in iou_key else '.2f',  # Integer for single thresholds, float for average
+            fmt='d' if 'IoU=0.50:0.95' not in iou_key else '.1f',  # Integer for single thresholds, float for average
             cmap='Blues',
-            xticklabels=labels, 
+            xticklabels=labels_with_fn, 
             yticklabels=labels)
         
         if 'IoU=0.50:0.95' in iou_key:
             plt.title('Confusion Matrix Averaged Across IoU=[0.50:0.95]')
         else:
             plt.title(f'Confusion Matrix at {iou_key}')
-        plt.ylabel('True Label')
-        plt.xlabel('Predicted Label')
+        plt.ylabel('True Class')
+        plt.xlabel('Predicted Class')
 
     plt.tight_layout()
     plt.savefig(f'{output_dir}/confusion_matrices.png', dpi=300, bbox_inches='tight')
@@ -1865,4 +1951,5 @@ def evaluate_full_dataset(model, device='cuda:0', score_thresh=0.5,
 
     return metrics_df, class_metrics_df, pred_df
 
-evaluate_full_dataset(model, 'cuda:0', score_thresh=0.5)
+evaluate_full_dataset(model, device='cuda:0', score_thresh=float(model.score_thresh),
+                      output_dir=f'C:/Users/exx/Deep Learning/UAV_Waterfowl_Detection/RetinaNet/full_dataset_evaluation/{current_datetime}')

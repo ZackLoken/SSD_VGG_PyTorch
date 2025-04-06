@@ -738,7 +738,7 @@ class CustomRetinaNet(RetinaNet):
                     keep_mask = image_scores[remaining_indices] > self.nms_score
                     remaining_indices = [remaining_indices[i] for i in range(len(remaining_indices)) if keep_mask[i]]
                 
-                keep = torch.tensor(keep, device=image_boxes.device)
+                keep = torch.tensor(keep, dtype=torch.long, device=image_boxes.device)
                 
                 # Sort by score and limit detections
                 keep = keep[image_scores[keep].argsort(descending=True)]
@@ -762,7 +762,7 @@ def get_retinanet_model(depth, num_classes=10, min_size=810, max_size=1440, imag
                         detections_per_img=200, fg_iou_thresh=0.6, bg_iou_thresh=0.5, topk_candidates=200, alpha=0.75, gamma_loss=3.0, 
                         class_weights=None, beta_loss=0.5, lambda_loss=1.5, dropout_prob=0.25, nms_score=0.25, nms_sigma=0.5):
     
-    trainable_backbone_layers = 0  # set constant, adjust later with function
+    trainable_backbone_layers = 0 
 
     # Create the backbone with FPN
     if depth == 18:
@@ -1384,14 +1384,19 @@ def main(best_trial):
             # Print per-class metrics
             print("Training Class Metrics:")
             for name, m in train_class_metrics.items():
-                print(f"Class: {name}, AP@0.50: {m['precision_50']:.4f}, AR@0.50: {m['recall_50']:.4f}, F1@0.50: {m['f1_50']:.4f}")
-                print(f"Class: {name}, AP@0.75: {m['precision_75']:.4f}, AR@0.75: {m['recall_75']:.4f}, F1@0.75: {m['f1_75']:.4f}")
-                print(f"Class: {name}, AP@[0.50:0.95]: {m['precision_50_95']:.4f}, AR@[0.50:0.95]: {m['recall_50_95']:.4f}, F1@[0.50:0.95]: {m['f1_50_95']:.4f}")
+                print()
+                print(name)
+                print(f"AP@0.50: {m['precision_50']:.4f},\n AP@0.75: {m['precision_75']:.4f},\n AP@[0.50:0.95]: {m['precision_50_95']:.4f}")
+                print(f"AR@0.50: {m['recall_50']:.4f},\n AR@0.75: {m['recall_75']:.4f},\n AR@[0.50:0.95]: {m['recall_50_95']:.4f}")
+                print(f"F1@0.50: {m['f1_50']:.4f},\n F1@0.75: {m['f1_75']:.4f},\n F1@[0.50:0.95]: {m['f1_50_95']:.4f}")
+            print()
             print("\nValidation Class Metrics:")
             for name, m in val_class_metrics.items():
-                print(f"Class: {name}, AP@0.50: {m['precision_50']:.4f}, AR@0.50: {m['recall_50']:.4f}, F1@0.50: {m['f1_50']:.4f}")
-                print(f"Class: {name}, AP@0.75: {m['precision_75']:.4f}, AR@0.75: {m['recall_75']:.4f}, F1@0.75: {m['f1_75']:.4f}")
-                print(f"Class: {name}, AP@[0.50:0.95]: {m['precision_50_95']:.4f}, AR@[0.50:0.95]: {m['recall_50_95']:.4f}, F1@[0.50:0.95]: {m['f1_50_95']:.4f}")
+                print()
+                print(name)
+                print(f"AP@0.50: {m['precision_50']:.4f},\n AP@0.75: {m['precision_75']:.4f},\n AP@[0.50:0.95]: {m['precision_50_95']:.4f}")
+                print(f"AR@0.50: {m['recall_50']:.4f},\n AR@0.75: {m['recall_75']:.4f},\n AR@[0.50:0.95]: {m['recall_50_95']:.4f}")
+                print(f"F1@0.50: {m['f1_50']:.4f},\n F1@0.75: {m['f1_75']:.4f},\n F1@[0.50:0.95]: {m['f1_50_95']:.4f}")
             print()
 
             # Visualize predictions periodically

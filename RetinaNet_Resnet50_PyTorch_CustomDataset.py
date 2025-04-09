@@ -642,122 +642,187 @@ class CustomRetinaNet(RetinaNet):
         self.nms_sigma = nms_sigma
 
     def postprocess_detections(self, head_outputs, anchors, image_shapes):
+        # type: (Dict[str, List[torch.Tensor]], List[List[torch.Tensor]], List[Tuple[int, int]]) -> List[Dict[str, torch.Tensor]]
         class_logits = head_outputs["cls_logits"]
         box_regression = head_outputs["bbox_regression"]
-        
+
         num_images = len(image_shapes)
         detections: List[Dict[str, torch.Tensor]] = []
-        
+
         for index in range(num_images):
             box_regression_per_image = [br[index] for br in box_regression]
             logits_per_image = [cl[index] for cl in class_logits]
             anchors_per_image, image_shape = anchors[index], image_shapes[index]
-            
+
             image_boxes = []
             image_scores = []
             image_labels = []
-            
-            # Process each feature level
+
             for box_regression_per_level, logits_per_level, anchors_per_level in zip(
                 box_regression_per_image, logits_per_image, anchors_per_image
             ):
-                scores_per_level = torch.sigmoid(logits_per_level)  # (N, num_classes)
+                num_classes = logits_per_level.shape[-1]
+
+                # remove low scoring boxes
+                scores_per_level = torch.sigmoid(logits_per_level).flatten()
                 keep_idxs = scores_per_level > self.score_thresh
-                
-                # Class-specific NMS first
-                for class_idx in range(scores_per_level.shape[-1]):
-                    class_scores = scores_per_level[:, class_idx]
-                    class_keep = keep_idxs[:, class_idx]
-                    
-                    if class_keep.sum() == 0:
-                        continue
-                    
-                    # Get boxes and scores for this class
-                    class_boxes = self.box_coder.decode_single(
-                        box_regression_per_level[class_keep],
-                        anchors_per_level[class_keep]
-                    )
-                    class_boxes = box_ops.clip_boxes_to_image(class_boxes, image_shape)
-                    class_scores = class_scores[class_keep]
-                    
-                    # Apply class-specific soft-NMS
-                    class_keep = batched_soft_nms(
-                        boxes=class_boxes,
-                        scores=class_scores,
-                        idxs=torch.zeros_like(class_scores, dtype=torch.long),  # Same class
-                        sigma=self.nms_sigma,
-                        score_threshold=self.nms_score,
-                    )
-                    
-                    # Keep top scoring boxes after class-specific NMS
-                    class_keep = class_keep[class_scores[class_keep].argsort(descending=True)]
-                    class_keep = class_keep[:self.detections_per_img]
-                    
-                    image_boxes.append(class_boxes[class_keep])
-                    image_scores.append(class_scores[class_keep])
-                    image_labels.append(torch.full_like(
-                        class_scores[class_keep], class_idx, dtype=torch.int64
-                    ))
+                scores_per_level = scores_per_level[keep_idxs]
+                topk_idxs = torch.where(keep_idxs)[0]
+
+                # keep only topk scoring predictions
+                num_topk = det_utils._topk_min(topk_idxs, self.topk_candidates, 0)
+                scores_per_level, idxs = scores_per_level.topk(num_topk)
+                topk_idxs = topk_idxs[idxs]
+
+                anchor_idxs = torch.div(topk_idxs, num_classes, rounding_mode="floor")
+                labels_per_level = topk_idxs % num_classes
+
+                boxes_per_level = self.box_coder.decode_single(
+                    box_regression_per_level[anchor_idxs], anchors_per_level[anchor_idxs]
+                )
+                boxes_per_level = box_ops.clip_boxes_to_image(boxes_per_level, image_shape)
+
+                image_boxes.append(boxes_per_level)
+                image_scores.append(scores_per_level)
+                image_labels.append(labels_per_level)
+
+            image_boxes = torch.cat(image_boxes, dim=0)
+            image_scores = torch.cat(image_scores, dim=0)
+            image_labels = torch.cat(image_labels, dim=0)
+
+            # First pass: Apply soft-NMS across all classes
+            keep = batched_soft_nms(
+                image_boxes, 
+                image_scores, 
+                image_labels, 
+                sigma=self.nms_sigma, 
+                score_threshold=self.nms_score
+            )
             
-            if len(image_boxes) > 0:
-                image_boxes = torch.cat(image_boxes, dim=0)
-                image_scores = torch.cat(image_scores, dim=0)
-                image_labels = torch.cat(image_labels, dim=0)
-                
-                # Global soft-NMS across all classes with score-weighted IoU
-                keep = []
-                remaining_indices = list(range(len(image_boxes)))
-                
-                while remaining_indices:
-                    # Get highest scoring box
-                    scores = image_scores[remaining_indices]
-                    current_idx = remaining_indices[scores.argmax()]
-                    keep.append(current_idx)
+            # Keep only the best detections after first pass
+            keep_boxes = image_boxes[keep]
+            keep_scores = image_scores[keep]
+            keep_labels = image_labels[keep]
+            
+            # Sort by score for second pass processing
+            score_order = keep_scores.argsort(descending=True)
+            keep_boxes = keep_boxes[score_order]
+            keep_scores = keep_scores[score_order]
+            keep_labels = keep_labels[score_order]
+            
+            # Remove any remaining overlapping boxes regardless of class
+            final_keep = []
+            remaining_boxes_mask = torch.ones(len(keep_boxes), dtype=torch.bool, device=keep_boxes.device)
+            
+            for i in range(len(keep_boxes)):
+                if remaining_boxes_mask[i]:
+                    final_keep.append(i)
                     
-                    if len(remaining_indices) == 1:
-                        break
-                        
-                    # Remove current index
-                    remaining_indices.remove(current_idx)
+                    # Calculate IoU between this box and all remaining boxes
+                    current_box = keep_boxes[i:i+1]
+                    ious = box_ops.box_iou(current_box, keep_boxes[remaining_boxes_mask])[0]
                     
-                    # Calculate IoUs with remaining boxes
-                    current_box = image_boxes[current_idx:current_idx+1]
-                    remaining_boxes = image_boxes[remaining_indices]
-                    ious = box_ops.box_iou(current_box, remaining_boxes)[0]
+                    # Identify boxes with high overlap (adjust this threshold as needed)
+                    high_overlap_indices = torch.where(ious > 0.9)[0]  # Stricter overlap threshold for second pass
                     
-                    # Weight IoUs by score differences
-                    score_diffs = torch.abs(image_scores[current_idx] - image_scores[remaining_indices])
-                    weighted_ious = ious * torch.exp(-score_diffs / self.nms_sigma)
+                    # Convert relative indices to absolute indices in the remaining_boxes_mask
+                    absolute_indices = torch.where(remaining_boxes_mask)[0][high_overlap_indices]
                     
-                    # Update scores using weighted IoUs
-                    image_scores[remaining_indices] *= torch.exp(
-                        -weighted_ious ** 2 / self.nms_sigma
-                    )
+                    # Remove the current index from the list of boxes to suppress
+                    if len(absolute_indices) > 0 and absolute_indices[0] == i:
+                        absolute_indices = absolute_indices[1:]
                     
-                    # Remove low scoring boxes
-                    keep_mask = image_scores[remaining_indices] > self.nms_score
-                    remaining_indices = [remaining_indices[i] for i in range(len(remaining_indices)) if keep_mask[i]]
+                    # Set these boxes to be removed
+                    remaining_boxes_mask[absolute_indices] = False
+            
+            final_keep = torch.tensor(final_keep, device=keep_boxes.device, dtype=torch.long)
+            
+            # Limit to max detections per image
+            if len(final_keep) > self.detections_per_img:
+                final_keep = final_keep[:self.detections_per_img]
                 
-                keep = torch.tensor(keep, dtype=torch.long, device=image_boxes.device)
-                
-                # Sort by score and limit detections
-                keep = keep[image_scores[keep].argsort(descending=True)]
-                keep = keep[:self.detections_per_img]
-                
-                detections.append({
-                    "boxes": image_boxes[keep],
-                    "scores": image_scores[keep],
-                    "labels": image_labels[keep],
-                })
-            else:
-                detections.append({
-                    "boxes": torch.empty((0, 4), device=box_regression_per_image[0].device),
-                    "scores": torch.empty((0,), device=box_regression_per_image[0].device),
-                    "labels": torch.empty((0,), device=box_regression_per_image[0].device, dtype=torch.int64),
-                })
-        
+            detections.append(
+                {
+                    "boxes": keep_boxes[final_keep],
+                    "scores": keep_scores[final_keep],
+                    "labels": keep_labels[final_keep],
+                }
+            )
+
         return detections
+
+    # def postprocess_detections(self, head_outputs, anchors, image_shapes):
+    #     # type: (Dict[str, List[torch.Tensor]], List[List[torch.Tensor]], List[Tuple[int, int]]) -> List[Dict[str, torch.Tensor]]
+    #     class_logits = head_outputs["cls_logits"]
+    #     box_regression = head_outputs["bbox_regression"]
+
+    #     num_images = len(image_shapes)
+
+    #     detections: List[Dict[str, torch.Tensor]] = []
+
+    #     for index in range(num_images):
+    #         box_regression_per_image = [br[index] for br in box_regression]
+    #         logits_per_image = [cl[index] for cl in class_logits]
+    #         anchors_per_image, image_shape = anchors[index], image_shapes[index]
+
+    #         image_boxes = []
+    #         image_scores = []
+    #         image_labels = []
+
+    #         for box_regression_per_level, logits_per_level, anchors_per_level in zip(
+    #             box_regression_per_image, logits_per_image, anchors_per_image
+    #         ):
+    #             num_classes = logits_per_level.shape[-1]
+
+    #             # remove low scoring boxes
+    #             scores_per_level = torch.sigmoid(logits_per_level).flatten()
+    #             keep_idxs = scores_per_level > self.score_thresh
+    #             scores_per_level = scores_per_level[keep_idxs]
+    #             topk_idxs = torch.where(keep_idxs)[0]
+
+    #             # keep only topk scoring predictions
+    #             num_topk = det_utils._topk_min(topk_idxs, self.topk_candidates, 0)
+    #             scores_per_level, idxs = scores_per_level.topk(num_topk)
+    #             topk_idxs = topk_idxs[idxs]
+
+    #             anchor_idxs = torch.div(topk_idxs, num_classes, rounding_mode="floor")
+    #             labels_per_level = topk_idxs % num_classes
+
+    #             boxes_per_level = self.box_coder.decode_single(
+    #                 box_regression_per_level[anchor_idxs], anchors_per_level[anchor_idxs]
+    #             )
+    #             boxes_per_level = box_ops.clip_boxes_to_image(boxes_per_level, image_shape)
+
+    #             image_boxes.append(boxes_per_level)
+    #             image_scores.append(scores_per_level)
+    #             image_labels.append(labels_per_level)
+
+    #         image_boxes = torch.cat(image_boxes, dim=0)
+    #         image_scores = torch.cat(image_scores, dim=0)
+    #         image_labels = torch.cat(image_labels, dim=0)
+
+    #         # Apply custom soft non-maximum suppression using the new parameters.
+    #         keep = batched_soft_nms(image_boxes, 
+    #                                 image_scores, 
+    #                                 image_labels, 
+    #                                 sigma=self.nms_sigma, 
+    #                                 score_threshold=self.nms_score)
+
+    #         # Sort by score descending and limit to max detections per image
+    #         keep = keep[image_scores[keep].argsort(descending=True)]
+    #         keep = keep[: self.detections_per_img]
+
+    #         detections.append(
+    #             {
+    #                 "boxes": image_boxes[keep],
+    #                 "scores": image_scores[keep],
+    #                 "labels": image_labels[keep],
+    #             }
+    #         )
+
+    #     return detections
     
+
 def get_retinanet_model(depth, num_classes=10, min_size=810, max_size=1440, image_mean=[0, 0, 0], image_std=[1, 1, 1], score_thresh=0.1,
                         detections_per_img=200, fg_iou_thresh=0.6, bg_iou_thresh=0.5, topk_candidates=200, alpha=0.75, gamma_loss=3.0, 
                         class_weights=None, beta_loss=0.5, lambda_loss=1.5, dropout_prob=0.25, nms_score=0.25, nms_sigma=0.5):
@@ -967,7 +1032,7 @@ class BestTrial:
             "beta_loss": 0.6,
             "lambda_loss": 1.2,
             "nms_score": 0.6,
-            "nms_sigma": 0.3,
+            "nms_sigma": 0.5,
             "class_weights": train_class_weights,
             "train_sampler": train_sampler,
         }
